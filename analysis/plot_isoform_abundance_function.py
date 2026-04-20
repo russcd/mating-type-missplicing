@@ -93,6 +93,7 @@ sns.stripplot(
     size=3,
     ax=ax1
 )
+ax1.set_ylim(0, 60)
 ax1.set_ylabel("Number of Isoforms", fontsize=9)
 ax1.set_xlabel("Number of Introns", fontsize=9)
 ax1.get_legend().remove()
@@ -128,22 +129,18 @@ ax2.set_xlabel("Number of Introns", fontsize=9)
 xticks = ax2.get_xticks()
 ax2.set_xticklabels([str(int(t)) if t < 5 else "5+" for t in xticks], fontsize=8)
 
-# ---- Shared legend directly above plots ----
+# ---- Shared legend in left panel ----
 handles, labels = ax2.get_legend_handles_labels()
 by_label = dict(zip(labels, handles))
-fig.legend(
+ax1.legend(
     by_label.values(),
     ["Autosomes", "Mating-Type Region"],
-    title="",
-    loc="upper center",
-    bbox_to_anchor=(0.5, 1.0),  # right above the axes
-    ncol=2,
+    loc="upper left",
     fontsize=8,
-    title_fontsize=9
+    frameon=True,
 )
 ax2.get_legend().remove()
 
-# Adjust spacing so legend is snug
-plt.subplots_adjust(top=0.88, bottom=0.15, wspace=0.3)
+plt.subplots_adjust(left=0.1, bottom=0.15, wspace=0.3)
 plt.savefig(args.output)
 plt.close()

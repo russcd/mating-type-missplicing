@@ -1,0 +1,2 @@
+baseline_roc_auc	baseline_accuracy	baseline_precision	baseline_recall	baseline_f1	final_roc_auc	final_accuracy	final_precision	final_recall	final_f1	n_features	n_train	n_test	train_class_balance	test_class_balance	selection_method
+0.8268698060941828	0.7631578947368421	0.7272727272727273	0.8421052631578947	0.7804878048780488	0.8344875346260388	0.7236842105263158	0.660377358490566	0.9210526315789473	0.7692307692307693	5	356	76	0.4859550561797753	0.5	elbow

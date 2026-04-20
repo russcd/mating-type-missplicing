@@ -4,7 +4,9 @@ import pandas as pd
 import numpy as np
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.model_selection import train_test_split, RandomizedSearchCV, GroupKFold
-from sklearn.metrics import roc_auc_score
+from sklearn.metrics import (roc_auc_score, accuracy_score,
+                             confusion_matrix, ConfusionMatrixDisplay,
+                             precision_score, recall_score, f1_score)
 from sklearn.inspection import partial_dependence
 from scipy.stats import randint
 import matplotlib.pyplot as plt
@@ -87,20 +89,25 @@ def main():
     parser.add_argument("--input", required=True, help="Input TSV with features")
     parser.add_argument("--output", default="output", help="Base filename for all outputs")
     parser.add_argument("--threshold", type=float, default=0.025, help="Retention ratio threshold for misspliced introns")
+    parser.add_argument("--region-type", choices=["mating_type", "autosomal"], default="mating_type",
+                        help="Subset to use: mating_type (In_region==1) or autosomal (In_region==0). Default: mating_type")
     args = parser.parse_args()
     
-    # Set up output filenames
-    output_base = args.output
+    # Set up output filenames (autosomal runs get distinct base to avoid overwriting)
+    output_base = f"{args.output}_autosomal" if args.region_type == "autosomal" else args.output
     importance_file = f"{output_base}_importances.tsv"
+    metrics_file = f"{output_base}_metrics.tsv"
     elbow_plot = f"{output_base}_feature_auc_elbow_curve.pdf"
     scatter_plot = f"{output_base}_feature_auc_scatter.pdf"
     pdp_plot = f"{output_base}_partial_dependence_plots.pdf"
+    cm_plot = f"{output_base}_confusion_matrices.pdf"
 
     # === Load data ===
     df = pd.read_csv(args.input, sep="\t")
     if "Expressed" in df.columns and "In_region" in df.columns:
-        df = df[(df["Expressed"] == 1) & (df["In_region"] == 1)]
-        print(f"{len(df)} expressed introns retained for modeling")
+        in_region_val = 1 if args.region_type == "mating_type" else 0
+        df = df[(df["Expressed"] == 1) & (df["In_region"] == in_region_val)]
+        print(f"{len(df)} expressed introns retained for modeling ({args.region_type})")
 
     if "gene_id" not in df.columns:
         raise ValueError("gene_id column is required for gene-level splitting.")
@@ -131,6 +138,7 @@ def main():
 
     gene_ids = df["gene_id"].copy()
     X = pd.get_dummies(X)
+    X = X.astype(np.float64)
     print(f"Using {X.shape[1]} features for modeling")
 
     # === Gene-level train/test split ===
@@ -222,6 +230,55 @@ def main():
     }).sort_values("Importance", ascending=False)
     final_feature_importances.to_csv(importance_file, sep="\t", index=False)
     print(f"Final model feature importances written to {importance_file}")
+    
+    # === Compute metrics ===
+    baseline_preds = best_model.predict(X_test)
+    final_preds = final_model.predict(X_test[selected_features])
+
+    baseline_accuracy = accuracy_score(y_test, baseline_preds)
+    final_accuracy = accuracy_score(y_test, final_preds)
+
+    metrics = pd.DataFrame([{
+        "baseline_roc_auc": baseline_auc,
+        "baseline_accuracy": baseline_accuracy,
+        "baseline_precision": precision_score(y_test, baseline_preds, zero_division=0),
+        "baseline_recall": recall_score(y_test, baseline_preds, zero_division=0),
+        "baseline_f1": f1_score(y_test, baseline_preds, zero_division=0),
+        "final_roc_auc": current_auc,
+        "final_accuracy": final_accuracy,
+        "final_precision": precision_score(y_test, final_preds, zero_division=0),
+        "final_recall": recall_score(y_test, final_preds, zero_division=0),
+        "final_f1": f1_score(y_test, final_preds, zero_division=0),
+        "n_features": optimal_n,
+        "n_train": len(X_train),
+        "n_test": len(X_test),
+        "train_class_balance": y_train.mean(),
+        "test_class_balance": y_test.mean(),
+        "selection_method": method
+    }])
+    metrics.to_csv(metrics_file, sep="\t", index=False)
+    print(f"Model metrics written to {metrics_file}")
+
+    # === Confusion matrices ===
+    print("Generating confusion matrices...")
+    with PdfPages(cm_plot) as pdf:
+        fig, axes = plt.subplots(1, 2, figsize=(10, 4))
+        for ax, preds, title in zip(
+            axes,
+            [baseline_preds, final_preds],
+            [f"Baseline model (all {X.shape[1]} features)", f"Final model ({optimal_n} features)"]
+        ):
+            cm = confusion_matrix(y_test, preds)
+            disp = ConfusionMatrixDisplay(cm, display_labels=["No retention", "Retained"])
+            disp.plot(ax=ax, colorbar=False, cmap="Blues")
+            # Annotate with class-level rates
+            n_neg, n_pos = (y_test == 0).sum(), (y_test == 1).sum()
+            ax.set_title(f"{title}\n(test: {n_neg} no-retention, {n_pos} retained)", fontsize=9)
+        plt.suptitle(f"Confusion matrices — {args.region_type} introns (threshold={args.threshold})", fontsize=11)
+        plt.tight_layout()
+        pdf.savefig(fig, bbox_inches="tight")
+        plt.close()
+    print(f"Confusion matrices saved to {cm_plot}")
 
     # visualize elbow curve
     plt.figure(figsize=(6, 4))
@@ -240,25 +297,31 @@ def main():
     plt.close()
     print(f"Elbow curve saved to {elbow_plot}")
 
-    # === LOFO ===
-    lofo_results = []
-    with ProcessPoolExecutor() as executor:
-        futures = {
-            executor.submit(
-                train_and_eval_without_feature,
-                feat,
-                X_train[selected_features],
-                X_test[selected_features],
-                y_train,
-                y_test,
-                rf_params,
-                current_auc
-            ): feat
-            for feat in selected_features
-        }
-        for f in tqdm(as_completed(futures), total=len(futures)):
-            lofo_results.append(f.result())
-    lofo_df = pd.DataFrame(lofo_results)
+    # === LOFO (skip when only 1 feature: leaving it out would leave 0 features for fit) ===
+    if len(selected_features) >= 2:
+        lofo_results = []
+        with ProcessPoolExecutor() as executor:
+            futures = {
+                executor.submit(
+                    train_and_eval_without_feature,
+                    feat,
+                    X_train[selected_features],
+                    X_test[selected_features],
+                    y_train,
+                    y_test,
+                    rf_params,
+                    current_auc
+                ): feat
+                for feat in selected_features
+            }
+            for f in tqdm(as_completed(futures), total=len(futures)):
+                lofo_results.append(f.result())
+        lofo_df = pd.DataFrame(lofo_results)
+    else:
+        lofo_df = pd.DataFrame([
+            {"Feature": f, "AUC_without": np.nan, "AUC_drop": np.nan}
+            for f in selected_features
+        ])
 
     # === Single-feature AUC ===
     single_results = []
@@ -303,9 +366,7 @@ def main():
     n_rows = int(np.ceil(n_features / n_cols))
     
     fig, axes = plt.subplots(n_rows, n_cols, figsize=(4 * n_cols, 3.5 * n_rows))
-    if n_rows == 1:
-        axes = axes.reshape(1, -1)
-    axes = axes.flatten()
+    axes = np.atleast_1d(axes).flatten()
     
     for idx, feat in enumerate(selected_features):
         ax = axes[idx]

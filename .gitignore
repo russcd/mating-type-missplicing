@@ -1,0 +1,11 @@
+*.pdf
+*.png
+analysis/*.tsv
+analysis/compute_pwd.py
+.snakemake
+.cursor
+CLAUDE.md
+results/
+logs/
+data/NMD_proteins.txt
+
