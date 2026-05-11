@@ -1,0 +1,4 @@
+NMD_Protein M_pusilla_ortholog M_commoda_ortholog B_prasinos_ortholog O_tauri_ortholog
+UPF1 MICPUCDRAFT_56002 MICPUN_65270 Bathy10g01700 OT_ostta09g02800 
+UPF2 MICPUCDRAFT_46957 MICPUN_58110 Bathy18g00500 OT_ostta04g01650 
+UPF3 NA NA NA OT_ostta15g01265 
